@@ -19,3 +19,6 @@ credentials.json
 
 # OS
 .DS_Store
+
+# Local-only agent guidance, not published
+CLAUDE.md
