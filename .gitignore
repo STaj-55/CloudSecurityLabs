@@ -1,0 +1,21 @@
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+!*.example.tfvars
+
+# Bicep build artifacts (compiled ARM JSON templates)
+# Convention: name compiled output "<template>.compiled.json" so it's caught here
+# without clobbering legitimate ARM/JSON assets checked into the repo.
+*.compiled.json
+
+# Secrets / credentials
+.env
+*.pem
+*.key
+credentials.json
+
+# OS
+.DS_Store
