@@ -1,0 +1,33 @@
+# Local Kusto engine for executing generated detection test queries.
+#
+#   docker compose up -d          start it (first pull is ~1-2 GB)
+#   docker compose logs -f kusto  watch it boot (~30-60s)
+#   docker compose down           stop and remove it
+#
+# Kustainer is Microsoft's free Azure Data Explorer emulator. It is an ADX engine,
+# not Log Analytics: core KQL is identical, but Log Analytics-only functions
+# (workspace(), Sentinel helpers, built-in table schemas) do not exist here. That is
+# fine for this harness because every table is shadowed by a datatable() literal, so
+# the queries never touch a real table. See docs/adr/0001-kusto-emulator.md.
+#
+# No authentication: the emulator listens on plain HTTP with no token. It binds to
+# 127.0.0.1 below so it is not reachable from the network.
+
+services:
+  kusto:
+    # TODO: pin to a digest once pulled, per the repo's version-pinning convention:
+    #   docker compose pull
+    #   docker image inspect mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest \
+    #     --format '{{index .RepoDigests 0}}'
+    # then replace the tag below with image@sha256:<digest>.
+    image: mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest
+    container_name: detection-kusto
+    environment:
+      # Required by the image; it refuses to start without an explicit EULA accept.
+      ACCEPT_EULA: "Y"
+    ports:
+      # Bound to loopback only — not exposed beyond this machine.
+      - "127.0.0.1:8080:8080"
+    # The engine needs headroom; it will fail to start or thrash below ~4 GB.
+    mem_limit: 4g
+    restart: unless-stopped
