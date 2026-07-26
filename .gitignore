@@ -13,9 +13,19 @@
 
 # Secrets / credentials
 .env
+*.env
+secrets/
 *.pem
 *.key
+*.pfx
 credentials.json
+azureauth.json
+local.settings.json
+
+# Python (detection tooling)
+__pycache__/
+.venv/
+.pytest_cache/
 
 # OS
 .DS_Store
