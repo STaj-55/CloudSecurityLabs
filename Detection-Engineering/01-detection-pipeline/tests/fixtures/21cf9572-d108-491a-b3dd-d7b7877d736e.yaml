@@ -1,0 +1,53 @@
+# Fixture for: Azure VM Run Command Execution
+#
+# Named after the rule's UUID so the fixture-to-rule link is unambiguous and
+# survives the rule file being renamed or moved between folders.
+#
+# Build the runnable test query with:
+#   python3 tooling/build_test_query.py --rule 21cf9572-d108-491a-b3dd-d7b7877d736e
+
+rule_id: 21cf9572-d108-491a-b3dd-d7b7877d736e
+table: AzureActivity
+
+# How many rows the rule query must return when run against these fixture rows.
+# Equals the number of true_positives: every TP must survive the query, every TN
+# must be filtered out. This is the negative-then-positive proof in one artifact.
+expected_rows: 1
+
+# Column name -> KQL type. This is the datatable() schema. Every row below must
+# supply exactly these keys: a missing or extra key is a hard error, not a default.
+columns:
+  TimeGenerated: datetime
+  Caller: string
+  CallerIpAddress: string
+  OperationNameValue: string
+  ActivityStatusValue: string
+  ResourceGroup: string
+  # Leading underscore is real: _ResourceId is a Log Analytics system column.
+  _ResourceId: string
+
+# Rows that MUST match the rule.
+true_positives:
+  # Run Command invoked against a production VM by a user identity that has no
+  # business managing compute, from an IP outside the corporate range.
+  - TimeGenerated: "2026-07-20T14:32:11Z"
+    Caller: j.doe@contoso.onmicrosoft.com
+    CallerIpAddress: 203.0.113.47
+    OperationNameValue: MICROSOFT.COMPUTE/VIRTUALMACHINES/RUNCOMMAND/ACTION
+    ActivityStatusValue: Succeeded
+    ResourceGroup: rg-prod-app01
+    _ResourceId: /subscriptions/<SUBSCRIPTION_ID>/resourcegroups/rg-prod-app01/providers/microsoft.compute/virtualmachines/vm-prod-app01
+
+# Rows that must NOT match the rule. These are the guardrail: if a future edit to
+# the query accidentally broadens it, one of these starts matching and the row
+# count assertion fails.
+true_negatives:
+  # Routine VM start. Same caller, same VM, same table — only the operation
+  # differs, so this row proves the OperationNameValue filter is doing the work.
+  - TimeGenerated: "2026-07-20T09:03:52Z"
+    Caller: j.doe@contoso.onmicrosoft.com
+    CallerIpAddress: 203.0.113.47
+    OperationNameValue: MICROSOFT.COMPUTE/VIRTUALMACHINES/START/ACTION
+    ActivityStatusValue: Succeeded
+    ResourceGroup: rg-prod-app01
+    _ResourceId: /subscriptions/<SUBSCRIPTION_ID>/resourcegroups/rg-prod-app01/providers/microsoft.compute/virtualmachines/vm-prod-app01

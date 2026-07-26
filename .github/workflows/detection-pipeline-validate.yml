@@ -57,3 +57,14 @@ jobs:
 
       - name: Validate detection schema
         run: python tooling/validate_schema.py
+
+      # Structural fixture check: confirms every column the rule query reads is
+      # declared in its fixture. Runs entirely offline — no workspace, no creds.
+      - name: Check fixture columns
+        run: python tooling/check_fixture_columns.py
+
+      # Query-execution tests are collected but skipped until a later phase wires
+      # up a workspace. -ra prints the skip reasons so they stay visible in the log
+      # rather than quietly disappearing.
+      - name: Run detection tests
+        run: python -m pytest tests/ -v -ra
