@@ -13,17 +13,26 @@ CloudSecurityLabs/
 ├── CLAUDE.md
 ├── .gitignore
 ├── .pre-commit-config.yaml
-└── AZ-500-Labs/
-    ├── README.md
-    ├── _template/
-    │   ├── README.md
-    │   ├── teardown.sh
-    │   ├── bicep/
-    │   ├── terraform/
-    │   ├── cli/
-    │   └── assets/
-    └── labs/
+├── .github/workflows/          # CI — GitHub only reads workflows from the repo root
+├── AZ-500-Labs/
+│   ├── README.md
+│   ├── _template/
+│   │   ├── README.md
+│   │   ├── teardown.sh
+│   │   ├── bicep/
+│   │   ├── terraform/
+│   │   ├── cli/
+│   │   └── assets/
+│   └── labs/
+└── Detection-Engineering/
+    └── 01-detection-pipeline/
 ```
 
-See [AZ-500-Labs](AZ-500-Labs/) for the current lab series, mapped to the four AZ-500 exam
-domains.
+## Series
+
+- **[AZ-500-Labs](AZ-500-Labs/)** — control labs mapped to the four AZ-500 exam domains. Each
+  lab builds one control four ways (Portal → CLI → Bicep → Terraform), then proves it enforces
+  with a negative-then-positive access test.
+- **[Detection-Engineering](Detection-Engineering/)** — detection-as-code projects. Same proof
+  discipline, applied to detection logic: a rule must demonstrably fire on the malicious case
+  and stay silent on the benign one next to it.
