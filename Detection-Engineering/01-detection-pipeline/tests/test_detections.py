@@ -95,15 +95,35 @@ def test_query_columns_are_declared_in_fixture(rule_id):
     assert not missing, f"query reads column(s) absent from the fixture: {sorted(missing)}"
 
 
-@pytest.mark.skip(
-    reason="Requires a Log Analytics workspace and Azure credentials to run the "
-    "generated KQL. Query execution lands in a later phase; until then the "
-    "row-count contract is asserted structurally by "
-    "test_expected_rows_equals_true_positive_count."
+from run_test_query import (  # noqa: E402
+    DEFAULT_ENDPOINT,
+    check_rule,
+    is_available,
 )
+
+# Probed once at collection time rather than per test — each probe is a real HTTP
+# round trip, and the engine is not going to appear halfway through a run.
+KUSTO_UP = is_available()
+
+requires_kusto = pytest.mark.skipif(
+    not KUSTO_UP,
+    reason=(
+        f"No Kusto engine reachable at {DEFAULT_ENDPOINT}. These tests execute the "
+        "generated KQL for real; start the emulator with 'docker compose up -d' "
+        "(allow ~60s to boot). Skipped rather than failed so the offline checks "
+        "still run on a machine without Docker."
+    ),
+)
+
+
+@requires_kusto
 @pytest.mark.parametrize("rule_id", FIXTURE_RULE_IDS)
-def test_query_execution_returns_expected_rows(rule_id):
+def test_query_execution_proves_the_rule(rule_id):
+    """The real negative-then-positive proof, executed by an actual Kusto engine.
+
+    Asserts the row count, that every returned row is a declared true positive, and
+    that no true negative leaked through.
+    """
     detection, fixture = _load(rule_id)
-    query = build_test_query(detection, fixture)
-    rows = execute_kql(query)  # noqa: F821 — implemented in a later phase
-    assert len(rows) == fixture["expected_rows"]
+    ok, messages = check_rule(detection, fixture, DEFAULT_ENDPOINT)
+    assert ok, "; ".join(messages)
