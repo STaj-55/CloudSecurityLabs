@@ -1,0 +1,105 @@
+# Validate locally with:  python3 tooling/validate_schema.py
+# Schema:                 schema/detection.schema.json
+
+id: 21cf9572-d108-491a-b3dd-d7b7877d736e
+title: Azure VM Run Command Execution
+status: experimental
+author: STaj-55
+
+# Quoted deliberately. Unquoted, PyYAML resolves 2026-07-26 into a datetime.date
+# object and the schema's "type": "string" check fails with a confusing error.
+created: "2026-07-26"
+modified: "2026-07-26"
+
+description: >-
+  Detects invocation of the Azure Run Command extension against a virtual machine
+  (Microsoft.Compute/virtualMachines/runCommand/action) as recorded in the
+  AzureActivity control-plane log. Run Command executes an arbitrary script inside
+  the guest OS as SYSTEM or root, using only the Azure control plane.
+
+rationale: >-
+  Run Command is remote code execution on a VM that requires no inbound network path,
+  no SSH or RDP exposure, no guest credentials, and no agent the defender chose to
+  install. Any principal holding Virtual Machine Contributor can use it. That makes it
+  a clean privilege pivot from a compromised Azure identity into the guest OS, and it
+  bypasses every host-network control the VM sits behind.
+
+data_source:
+  tables:
+    - AzureActivity
+  connector: Azure Activity
+  dcr_required: false
+  # AzureActivity is ingested at no charge, so validating this rule against a live
+  # workspace later costs nothing.
+  ingestion_cost: free
+
+attack:
+  tactic: TA0002
+  technique: T1651
+  technique_name: Cloud Administration Command
+
+severity: medium
+confidence: medium
+
+query_frequency: PT1H
+query_period: PT1H
+trigger_operator: gt
+trigger_threshold: 0
+
+entity_mappings:
+  - entity_type: Account
+    identifiers:
+      - name: FullName
+        column: Caller
+  - entity_type: IP
+    identifiers:
+      - name: Address
+        column: CallerIpAddress
+  - entity_type: AzureResource
+    identifiers:
+      - name: ResourceId
+        column: _ResourceId
+
+incident_config:
+  create_incident: true
+  grouping:
+    enabled: true
+    lookback: PT5H
+    group_by:
+      - Account
+
+false_positives:
+  - Platform and automation teams routinely use Run Command for patching, agent
+    installation and break-glass troubleshooting on VMs without SSH or RDP exposure.
+  - Azure Update Manager, Automation Account runbooks and some backup or antimalware
+    extensions invoke Run Command under a service principal or managed identity.
+  - Support-assisted troubleshooting sessions can generate Run Command calls from a
+    Microsoft-side caller during an open support case.
+
+validation:
+  method: fixture-datatable
+  reference: tests/fixtures/21cf9572-d108-491a-b3dd-d7b7877d736e.yaml
+  fixture: tests/fixtures/21cf9572-d108-491a-b3dd-d7b7877d736e.yaml
+
+response:
+  runbook: docs/runbooks/azure-vm-run-command.md
+  playbook: null
+  auto_response_tier: notify
+
+tuning_history: []
+
+# Block scalar (|-) keeps the KQL verbatim, including newlines, with no trailing
+# newline. Phase 3 prepends a datatable() literal named AzureActivity in front of
+# this exact string so the query runs unmodified against fixture rows.
+query: |-
+  AzureActivity
+  | where OperationNameValue =~ "MICROSOFT.COMPUTE/VIRTUALMACHINES/RUNCOMMAND/ACTION"
+  | where ActivityStatusValue in~ ("Success", "Succeeded", "Accepted", "Started")
+  | project
+      TimeGenerated,
+      Caller,
+      CallerIpAddress,
+      OperationNameValue,
+      ActivityStatusValue,
+      ResourceGroup,
+      _ResourceId

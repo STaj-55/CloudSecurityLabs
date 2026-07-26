@@ -1,0 +1,7 @@
+# Detection pipeline tooling dependencies.
+# Pinned to exact versions (== not >=) so CI and local runs resolve identically.
+# Matches the repo's "pin tool versions" reproducibility convention.
+
+jsonschema==4.23.0
+PyYAML==6.0.2
+pytest==8.3.4
