@@ -1,0 +1,59 @@
+# Validates detection rules in Detection-Engineering/01-detection-pipeline against
+# schema/detection.schema.json. This is the CI half of the local pre-commit safety net:
+# gitleaks runs on your machine, this runs on GitHub where it cannot be skipped.
+#
+# Named specifically (not "ci.yml") so future lab workflows can sit alongside it.
+
+name: Detection Pipeline — Validate
+
+on:
+  pull_request:
+    paths:
+      - 'Detection-Engineering/01-detection-pipeline/**'
+      # Included so edits to this workflow are tested by the PR that makes them.
+      - '.github/workflows/detection-pipeline-validate.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'Detection-Engineering/01-detection-pipeline/**'
+      - '.github/workflows/detection-pipeline-validate.yml'
+  # Adds a "Run workflow" button in the Actions tab for on-demand runs.
+  workflow_dispatch:
+
+# Least privilege. The default GITHUB_TOKEN can be granted write access to the repo;
+# this job only ever reads code, so it gets exactly that and nothing more.
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Schema validation
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        # Applies to every `run:` step below, so they execute inside the project
+        # folder rather than the repo root. `uses:` steps are unaffected.
+        working-directory: Detection-Engineering/01-detection-pipeline
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Quoted: unquoted, YAML would read this as the number 3.12 — which silently
+          # becomes "3.1" for a version like 3.10.
+          python-version: '3.12'
+          cache: pip
+          # requirements.txt is not at the repo root, so the cache action has to be
+          # told where to find it.
+          cache-dependency-path: Detection-Engineering/01-detection-pipeline/requirements.txt
+
+      - name: Install pinned dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate detection schema
+        run: python tooling/validate_schema.py
