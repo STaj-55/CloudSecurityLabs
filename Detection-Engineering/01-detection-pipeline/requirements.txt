@@ -5,3 +5,10 @@
 jsonschema==4.23.0
 PyYAML==6.0.2
 pytest==8.3.4
+
+# Live validation against Log Analytics (Phase 5).
+# azure-monitor-query 2.x keeps LogsQueryClient; only the metrics client moved out.
+# azure-identity supplies DefaultAzureCredential, which picks up the OIDC token on a
+# GitHub runner and the az CLI login locally, with no code change between the two.
+azure-monitor-query==2.0.0
+azure-identity==1.25.3

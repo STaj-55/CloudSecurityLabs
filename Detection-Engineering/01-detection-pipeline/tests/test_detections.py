@@ -95,35 +95,104 @@ def test_query_columns_are_declared_in_fixture(rule_id):
     assert not missing, f"query reads column(s) absent from the fixture: {sorted(missing)}"
 
 
+import os  # noqa: E402
+
 from run_test_query import (  # noqa: E402
     DEFAULT_ENDPOINT,
     check_rule,
+    execute as execute_kusto,
     is_available,
 )
 
-# Probed once at collection time rather than per test — each probe is a real HTTP
-# round trip, and the engine is not going to appear halfway through a run.
-KUSTO_UP = is_available()
 
-requires_kusto = pytest.mark.skipif(
-    not KUSTO_UP,
+def _log_analytics_executor():
+    """Executor backed by the real Log Analytics workspace, or None if unavailable.
+
+    The fixture queries shadow every table with `let <Table> = datatable(...)`, so
+    they never read a single row of real workspace data — the workspace is being used
+    purely as a KQL engine. timespan=None is passed explicitly: the implicit time
+    filter does not apply to a let-bound table, but relying on that quietly would be
+    a nasty surprise if it ever changed.
+    """
+    workspace = os.environ.get("LAW_CUSTOMER_ID")
+    if not workspace:
+        return None
+
+    try:
+        from azure.identity import DefaultAzureCredential
+        from azure.monitor.query import LogsQueryClient
+    except ImportError:
+        return None
+
+    try:
+        client = LogsQueryClient(DefaultAzureCredential())
+    except Exception:  # noqa: BLE001 - any credential problem means "not available"
+        return None
+
+    def execute(query: str) -> list[dict]:
+        result = client.query_workspace(workspace, query, timespan=None)
+        tables = getattr(result, "tables", None) or getattr(result, "partial_data", None) or []
+        rows: list[dict] = []
+        for table in tables:
+            rows.extend(dict(zip(table.columns, row)) for row in table.rows)
+        return rows
+
+    # Confirm the credential actually works before committing to this backend,
+    # rather than failing every test with an auth error.
+    try:
+        execute("print probe = 1")
+    except Exception:  # noqa: BLE001
+        return None
+    return execute
+
+
+def _select_backend():
+    """Prefer the real workspace; fall back to the local emulator; else skip.
+
+    Probed once at collection time — each probe is a real network round trip, and a
+    backend is not going to appear halfway through a run.
+    """
+    executor = _log_analytics_executor()
+    if executor is not None:
+        return executor, f"Log Analytics workspace {os.environ['LAW_CUSTOMER_ID'][:8]}..."
+    if is_available():
+        return (lambda q: execute_kusto(q, endpoint=DEFAULT_ENDPOINT)), \
+            f"local Kusto emulator at {DEFAULT_ENDPOINT}"
+    return None, None
+
+
+EXECUTOR, BACKEND = _select_backend()
+
+# In CI the whole point of the Azure job is that these tests actually execute. Without
+# this, a broken credential would make them skip and the job would still go green — a
+# silent loss of coverage. Set REQUIRE_KQL_ENGINE=1 there to turn "no engine" into a
+# hard failure, while local runs keep skipping politely.
+REQUIRE_ENGINE = os.environ.get("REQUIRE_KQL_ENGINE") == "1"
+
+requires_engine = pytest.mark.skipif(
+    EXECUTOR is None and not REQUIRE_ENGINE,
     reason=(
-        f"No Kusto engine reachable at {DEFAULT_ENDPOINT}. These tests execute the "
-        "generated KQL for real; start the emulator with 'docker compose up -d' "
-        "(allow ~60s to boot). Skipped rather than failed so the offline checks "
-        "still run on a machine without Docker."
+        "No KQL engine available. These tests execute the generated queries for real. "
+        "Either set LAW_CUSTOMER_ID with working Azure credentials (CI does this via "
+        "OIDC), or start the local emulator with 'docker compose up -d'. Skipped "
+        "rather than failed so the offline checks still pass on a machine with neither."
     ),
 )
 
 
-@requires_kusto
+@requires_engine
 @pytest.mark.parametrize("rule_id", FIXTURE_RULE_IDS)
 def test_query_execution_proves_the_rule(rule_id):
-    """The real negative-then-positive proof, executed by an actual Kusto engine.
+    """The real negative-then-positive proof, executed by an actual KQL engine.
 
-    Asserts the row count, that every returned row is a declared true positive, and
-    that no true negative leaked through.
+    Asserts the row count matches expected_rows, that every returned row is a
+    declared true positive, and that no true negative leaked through.
     """
+    assert EXECUTOR is not None, (
+        "REQUIRE_KQL_ENGINE=1 but no KQL engine is reachable. In CI this means the "
+        "Azure login or LAW_CUSTOMER_ID is broken — failing loudly rather than "
+        "skipping and reporting a false green."
+    )
     detection, fixture = _load(rule_id)
-    ok, messages = check_rule(detection, fixture, DEFAULT_ENDPOINT)
-    assert ok, "; ".join(messages)
+    ok, messages = check_rule(detection, fixture, EXECUTOR)
+    assert ok, f"[{BACKEND}] " + "; ".join(messages)

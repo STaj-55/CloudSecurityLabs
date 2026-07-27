@@ -151,10 +151,16 @@ def classify(returned: dict, blocks: list[dict]) -> str:
     return "unknown"
 
 
-def check_rule(detection: dict, fixture: dict, endpoint: str) -> tuple[bool, list[str]]:
-    """Execute one rule's test query and evaluate the result. Returns (ok, messages)."""
+def check_rule(detection: dict, fixture: dict, executor) -> tuple[bool, list[str]]:
+    """Execute one rule's test query and evaluate the result. Returns (ok, messages).
+
+    `executor` is any callable taking a KQL string and returning a list of row dicts.
+    That keeps the evaluation logic backend-agnostic: the local Kusto emulator and
+    the Log Analytics SDK client both satisfy it, so the assertions below are
+    identical no matter which engine ran the query.
+    """
     query = build_test_query(detection, fixture)
-    rows = execute(query, endpoint=endpoint)
+    rows = executor(query)
 
     blocks = fixture["_blocks"]
     expected = fixture["expected_rows"]
@@ -249,7 +255,9 @@ def main() -> int:
         rel = detection["_path"].relative_to(PROJECT_ROOT)
         try:
             fixture = load_fixture(fixture_path_for(rule_id))
-            ok, messages = check_rule(detection, fixture, args.endpoint)
+            ok, messages = check_rule(
+                detection, fixture, lambda q: execute(q, endpoint=args.endpoint)
+            )
         except (FixtureError, KustoError) as exc:
             print(f"FAIL {rel}")
             print(f"       {exc}")

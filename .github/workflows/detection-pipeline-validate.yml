@@ -27,8 +27,10 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    name: Schema validation
+  # Job 1: free, offline, no cloud credentials. Everything else gates behind it, so a
+  # typo never burns an Azure round trip.
+  schema:
+    name: Schema validation (offline)
     runs-on: ubuntu-latest
 
     defaults:
@@ -63,8 +65,97 @@ jobs:
       - name: Check fixture columns
         run: python tooling/check_fixture_columns.py
 
-      # Query-execution tests are collected but skipped until a later phase wires
-      # up a workspace. -ra prints the skip reasons so they stay visible in the log
-      # rather than quietly disappearing.
-      - name: Run detection tests
+      # No LAW_CUSTOMER_ID and no emulator here, so the execution test skips. That is
+      # deliberate: it proves the offline suite still passes on a machine with neither.
+      # -ra keeps the skip reason visible in the log rather than quietly disappearing.
+      - name: Run offline detection tests
+        run: python -m pytest tests/ -v -ra
+
+  # Job 2: does each rule's KQL actually parse, and does every column it references
+  # really exist in the workspace schema? This is what catches a rule that would have
+  # deployed cleanly to Sentinel and then matched nothing, silently, forever.
+  live-validation:
+    name: Live schema validation (Azure)
+    needs: schema
+    runs-on: ubuntu-latest
+
+    # id-token: write lets the runner mint the short-lived OIDC token that azure/login
+    # exchanges for an Azure access token. No secret credential is ever stored.
+    permissions:
+      id-token: write
+      contents: read
+
+    defaults:
+      run:
+        working-directory: Detection-Engineering/01-detection-pipeline
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Detection-Engineering/01-detection-pipeline/requirements.txt
+
+      - name: Install pinned dependencies
+        run: pip install -r requirements.txt
+
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Validate queries against live workspace schema
+        env:
+          LAW_CUSTOMER_ID: ${{ secrets.LAW_CUSTOMER_ID }}
+        run: python tooling/validate_live.py
+
+  # Job 3: run the Phase 3 fixture tests for real. These queries shadow every table
+  # with a datatable() literal, so they never read workspace data — the workspace is
+  # used purely as a KQL engine.
+  fixture-execution:
+    name: Fixture execution (Azure)
+    needs: schema
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    defaults:
+      run:
+        working-directory: Detection-Engineering/01-detection-pipeline
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Detection-Engineering/01-detection-pipeline/requirements.txt
+
+      - name: Install pinned dependencies
+        run: pip install -r requirements.txt
+
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Execute fixture tests against the workspace
+        env:
+          LAW_CUSTOMER_ID: ${{ secrets.LAW_CUSTOMER_ID }}
+          # Turns "no engine reachable" from a skip into a hard failure, so a broken
+          # credential cannot leave this job green with zero coverage.
+          REQUIRE_KQL_ENGINE: '1'
         run: python -m pytest tests/ -v -ra
