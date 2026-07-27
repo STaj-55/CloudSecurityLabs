@@ -4,10 +4,11 @@ A detection-as-code pipeline: detection rules live as version-controlled YAML, g
 against a strict schema on every pull request, and are proven against fixture data with a
 KQL unit-test harness that needs no Azure subscription to run.
 
-**Tested on:** 2026-07-26 · **Region:** n/a (all tooling runs offline)
-**Cost:** £0. Nothing here deploys Azure resources. The one detection targets `AzureActivity`,
-which Log Analytics ingests free of charge, so validating it against a live workspace in a
-later phase will also cost nothing.
+**Tested on:** 2026-07-26 · **Region:** eastus (`law-detection-dev` in `rg-detection-lab`)
+**Cost:** £0. Nothing here deploys billable Azure resources. The one detection targets
+`AzureActivity`, which Log Analytics ingests free of charge, and both CI validation and the
+fixture tests submit queries that return no data — Log Analytics query execution is not
+billed. The offline checks and the local Kusto emulator need no Azure subscription at all.
 
 ## Why this exists
 
@@ -40,10 +41,11 @@ labs use for access controls:
 │   ├── validate_schema.py        # rules conform to the schema; IDs are unique
 │   ├── check_fixture_columns.py  # every column the query reads exists in the fixture
 │   ├── build_test_query.py       # rule + fixture -> runnable KQL
-│   └── run_test_query.py         # executes that KQL against a local Kusto engine
+│   ├── run_test_query.py         # executes that KQL against a local Kusto engine
+│   └── validate_live.py          # queries resolve against the real workspace schema
 ├── docs/{adr,runbooks}/
 ├── docker-compose.yml     # local Kusto emulator
-└── requirements.txt       # pinned: jsonschema, PyYAML, pytest
+└── requirements.txt       # pinned deps
 ```
 
 CI lives at the repo root in [`.github/workflows/detection-pipeline-validate.yml`](../../.github/workflows/detection-pipeline-validate.yml),
@@ -127,6 +129,52 @@ mapping and incident creation all still need a real workspace. Kustainer is also
 engine, not Log Analytics, so Log Analytics-only functions (`workspace()`, Sentinel helpers)
 do not exist there. See the ADR for the full trade-off.
 
+## Live schema validation
+
+The offline checks prove a rule is internally consistent. They cannot prove it matches
+*reality* — that `CallerIpAddress` is genuinely a column on `AzureActivity` and not something
+misremembered. `tooling/validate_live.py` closes that gap by submitting each rule's query to
+the real Log Analytics workspace with a one-second timespan: long enough for the service to
+parse the KQL and resolve every column, narrow enough that no data comes back. Queries cost
+nothing.
+
+```bash
+export LAW_CUSTOMER_ID=<workspace GUID>
+./.venv/bin/python tooling/validate_live.py
+```
+
+Outcomes are three-way, and the distinction is the whole point:
+
+- **PASS** — parsed, and every column resolved.
+- **SKIP** — a table the rule *declares* has no schema in this workspace yet. Warned about
+  and listed by name in the summary, but not a build failure.
+- **FAIL** — invalid KQL, or a column that does not exist on a table that does.
+
+### What the API actually returns
+
+The classification is derived from probing a live workspace, not from documented error codes.
+Both failure modes arrive as `SEM0100`, distinguished only by message wording:
+
+| Scenario | Result |
+|---|---|
+| Valid query | `Success`, 0 rows |
+| Bad column in `where` | `SEM0100` · `Failed to resolve column or scalar expression named 'X'` |
+| Bad column in `project` | `SEM0100` · `Failed to resolve scalar expression named 'X'` |
+| KQL syntax error | `SYN0002` · `Query could not be parsed at 'wher' on line [2,3]` |
+| Unknown table | `SEM0100` · `Failed to resolve table **or column** expression named 'X'` |
+| Standard table with no data ever ingested (e.g. `SigninLogs`) | **`Success`, 0 rows — columns still fully validated** |
+
+That last row is the surprise, and it is good news: Log Analytics knows the schema of standard
+tables even when the workspace has never received a row for them. So a rule targeting
+`SigninLogs` gets full column validation *before* the connector is switched on. SKIP therefore
+only triggers for tables Log Analytics has no schema for at all — custom `_CL` tables, or
+solution tables that are not installed.
+
+Because both failures share one error code, a missing table is only treated as SKIP when the
+unresolved name appears in the rule's own `data_source.tables`. A query referencing some
+*other* unresolved table — a typo like `AzureActivityy` — FAILs. Without that cross-check,
+SKIP would be a loophole that silently swallows exactly the bug this script exists to catch.
+
 ## Running it locally
 
 ```bash
@@ -138,9 +186,31 @@ python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
 ./.venv/bin/python -m pytest tests/ -v               # full harness
 ```
 
-The first three run in CI on every PR touching this directory. Execution tests skip cleanly
-when no Kusto engine is reachable, so the suite still passes on a machine without Docker —
-running the emulator in CI is a follow-up.
+The fixture execution tests pick a backend automatically: the real workspace if
+`LAW_CUSTOMER_ID` is set and Azure credentials work, otherwise the local Kusto emulator,
+otherwise they skip. The same `check_rule` assertions run either way.
+
+## CI
+
+[`.github/workflows/detection-pipeline-validate.yml`](../../.github/workflows/detection-pipeline-validate.yml),
+path-filtered to this directory, runs three jobs on every PR:
+
+| Job | Needs Azure? | What it proves |
+|---|---|---|
+| `schema` | no | Rules conform to the schema, IDs are unique, fixture columns agree, offline tests pass |
+| `live-validation` | yes | Every query parses and every column exists in the real workspace |
+| `fixture-execution` | yes | Fixture queries execute for real: true positives match, true negatives do not |
+
+The two Azure jobs `needs: schema`, so the free offline check gates them — a typo never burns
+a cloud round trip. They authenticate with **OIDC via `azure/login@v2`**, so no credential is
+stored in the repo; each job declares `id-token: write` to mint the short-lived token. The
+`fixture-execution` job sets `REQUIRE_KQL_ENGINE=1`, which turns "no engine reachable" from a
+skip into a hard failure — otherwise a broken credential would leave the job green with zero
+coverage.
+
+If a PR-triggered run fails at login with `AADSTS700213`, read
+[docs/oidc-subject-format.md](docs/oidc-subject-format.md) — GitHub now sends an ID-based
+subject that does not match Microsoft's documented name-based format.
 
 ## Current detections
 
