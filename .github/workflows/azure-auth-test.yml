@@ -1,0 +1,30 @@
+name: Azure Auth Test
+
+on: workflow_dispatch
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  auth:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Confirm authenticated identity
+        run: |
+          echo "Authenticated as principal type: $(az account show --query user.type -o tsv)"
+          echo "Subscription state: $(az account show --query state -o tsv)"
+
+      - name: Confirm Log Analytics read access
+        run: |
+          az monitor log-analytics workspace show \
+            --resource-group rg-detection-lab \
+            --workspace-name law-detection-dev \
+            --query name -o tsv
